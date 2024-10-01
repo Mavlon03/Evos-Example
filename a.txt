@@ -1,0 +1,290 @@
+package uz.pdp.utils;
+
+import com.pengrad.telegrambot.UpdatesListener;
+import com.pengrad.telegrambot.model.CallbackQuery;
+import com.pengrad.telegrambot.model.Message;
+import com.pengrad.telegrambot.model.Update;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import static uz.pdp.utils.BotService.*;
+
+public class BotController {
+    public void start() {
+        ExecutorService executorService = Executors.newFixedThreadPool(10);
+        BotService.telegramBot.setUpdatesListener(updates ->{
+            for (Update update : updates) {
+            executorService.execute(() ->{
+                try {
+                    handleUpdates(update);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
+            }
+            return UpdatesListener.CONFIRMED_UPDATES_ALL;
+        });
+    }
+
+    private void handleUpdates(Update update) {
+        if (update.message() != null){
+            Message message = update.message();
+            TgUser tgUser = getOrCreateUser(message.chat().id());
+            if (message.chat() != null){
+                if (message.text() != null && message.text().equals("/start")){
+                    acceptStartWelcomeMessage(tgUser, message.text());
+                } else if (message.contact() != null) {
+                    acceptAndShareLocation(tgUser, message.contact());
+                } else if (message.location() != null) {
+                    acceptLocationAndChooseMenu(tgUser, message.location());
+                }
+            }
+        } else if (update.callbackQuery() != null) {
+            CallbackQuery callbackQuery = update.callbackQuery();
+            TgUser tgUser = getOrCreateUser(callbackQuery.from().id());
+            String data = callbackQuery.data();
+            if (tgUser.getState().equals(TgState.CHOOSING_TYPE)){
+                acceptMenuAndBeginWorking(tgUser, data);
+            }
+        }
+    }
+
+}
+
+
+
+
+
+
+
+
+package uz.pdp.utils;
+
+import com.pengrad.telegrambot.TelegramBot;
+import com.pengrad.telegrambot.model.CallbackQuery;
+import com.pengrad.telegrambot.model.Contact;
+import com.pengrad.telegrambot.model.Location;
+import com.pengrad.telegrambot.model.request.*;
+import com.pengrad.telegrambot.request.EditMessageReplyMarkup;
+import com.pengrad.telegrambot.request.SendMessage;
+import com.pengrad.telegrambot.request.SendPhoto;
+import uz.pdp.Category;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+public class BotService {
+
+    public static TelegramBot telegramBot = new TelegramBot("7449264666:AAFqrSxL0Ustlx1yQXmTMpk7Z_p1sCigRxk");
+
+
+    public static TgUser getOrCreateUser(Long chatId) {
+        for (TgUser tgUser : DB.USERS) {
+            if (tgUser.getChatId().equals(chatId)){
+                return tgUser;
+            }
+        }
+        TgUser tgUser = new TgUser();
+        tgUser.setChatId(chatId);
+        DB.USERS.add(tgUser);
+        return tgUser ;
+    }
+
+    public static void acceptStartWelcomeMessage(TgUser tgUser, String phone) {
+        tgUser.setContact(phone);
+        SendMessage sendMessage = new SendMessage(tgUser.getChatId(),
+                """
+                        Assalomu aleykum
+                        Botimizga xush kelibsiz!
+                        Iltimos kontagingizni yuboring:
+                        """);
+
+        sendMessage.replyMarkup(generateContactButton());
+        telegramBot.execute(sendMessage);
+        tgUser.setState(TgState.SHARING_CONTACT);
+    }
+
+    private static ReplyKeyboardMarkup generateContactButton() {
+        KeyboardButton keyboardButton = new KeyboardButton("Kontaktni ulashish");
+        keyboardButton.requestContact(true);
+        ReplyKeyboardMarkup replyKeyboardMarkup = new ReplyKeyboardMarkup(keyboardButton);
+        return replyKeyboardMarkup;
+    }
+
+    public static void acceptAndShareLocation(TgUser tgUser, Contact contact) {
+        String phone = PhoneNumber.fix(contact.phoneNumber());
+        tgUser.setPhone(phone);
+        SendMessage sendMessage = new SendMessage(tgUser.getChatId(), """
+                Lokatsiya yuboring:
+                """);
+        sendMessage.replyMarkup(generateLocationButton());
+        telegramBot.execute(sendMessage);
+        tgUser.setState(TgState.SHARING_LOCATION);
+    }
+
+    private static ReplyKeyboardMarkup generateLocationButton() {
+        KeyboardButton keyboardButton = new KeyboardButton("Lokatsiyani yuborish:");
+        keyboardButton.requestLocation(true);
+        ReplyKeyboardMarkup replyKeyboardMarkup = new ReplyKeyboardMarkup(keyboardButton);
+        return replyKeyboardMarkup;
+    }
+
+    public static void acceptLocationAndChooseMenu(TgUser tgUser, Location location) {
+        Float lonitute = location.longitude();
+        Float latitute = location.latitude();
+        tgUser.setLatitute(lonitute);
+        tgUser.setLatitute(latitute);
+        SendMessage sendMessage1 = new SendMessage(tgUser.getChatId(),
+                """
+                        Lokatsiya qabul qilindi.
+                        """);
+//        SendMessage sendMessage =  new SendMessage(tgUser.getChatId(),
+//                """
+//                        Manuni tanlang:
+//                        """);
+//        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+//        sendMessage1.replyMarkup(new ReplyKeyboardRemove());
+//        telegramBot.execute(sendMessage1);
+//        inlineKeyboardMarkup.addRow(
+//                new InlineKeyboardButton("Yeguliklar").callbackData("Eats"),
+//                new InlineKeyboardButton("Ichguliklar").callbackData("Drinks"),
+//                new InlineKeyboardButton("Kiyguliklar").callbackData("Wears")
+//        );
+//        sendMessage.replyMarkup(inlineKeyboardMarkup);
+//        telegramBot.execute(sendMessage);
+//        tgUser.setState(TgState.CHOOSING_TYPE);
+        SendMessage sendMessage = new SendMessage(tgUser.getChatId(), "Kategoriyani tanlang:");
+
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+        for (Category category : DB.CATEGORIES) {
+            inlineKeyboardMarkup.addRow(new InlineKeyboardButton(category.getName()).callbackData("cat_" + category.getCategory_Id()));
+        }
+
+        sendMessage.replyMarkup(inlineKeyboardMarkup);
+        telegramBot.execute(sendMessage);
+        tgUser.setState(TgState.CHOOSING_TYPE);
+    }
+
+    public static void acceptMenuAndBeginWorking(TgUser tgUser, CallbackQuery callbackQuery) {
+//        switch (data){
+//            case "Eats" ->
+//            case "Drinks" ->
+//            case "Wears" ->
+//        }
+        String data = callbackQuery.data();
+
+        if (data.startsWith("cat_")) {
+            Long categoryId = Long.parseLong(data.split("_")[1]);
+            showProductsForCategory(tgUser, categoryId);
+        } else if (data.startsWith("prod_")) {
+            Long productId = Long.parseLong(data.split("_")[1]);
+            showProductDetails(tgUser, productId);
+        } else if (data.endsWith("_plus") || data.endsWith("_minus")) {
+            adjustQuantity(data, tgUser,callbackQuery);
+        }
+    }
+    private static void showProductsForCategory(TgUser tgUser, Long categoryId) {
+        SendMessage sendMessage = new SendMessage(tgUser.getChatId(), "Mahsulotni tanlang:");
+
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+        for (Product product : DB.PRODUCTS) {
+            if (product.getCategory_Id().equals(categoryId)) {
+                inlineKeyboardMarkup.addRow(new InlineKeyboardButton(product.getName() + " - " + product.getPrice() + " so'm")
+                        .callbackData("prod_" + product.getProduct_Id()));
+            }
+        }
+
+        sendMessage.replyMarkup(inlineKeyboardMarkup);
+        BotService.telegramBot.execute(sendMessage);
+    }
+
+    private static void showProductDetails(TgUser tgUser, Long productId) {
+        for (Product product : DB.PRODUCTS) {
+            if (product.getProduct_Id().equals(productId)) {
+                ProductOrder order = getOrCreateOrder(tgUser.getChatId(), product.getProduct_Id());
+
+                // Rasmni o'qish
+                byte[] imageBytes = loadImageBytes(product.getImagePath());
+
+                // Mahsulot rasm va ma'lumotlarini yuborish
+                SendPhoto sendPhoto = new SendPhoto(tgUser.getChatId(), imageBytes);
+                BotService.telegramBot.execute(sendPhoto);
+
+                SendMessage sendMessage = new SendMessage(tgUser.getChatId(),
+                        product.getName() + " - " + product.getPrice() + " so'm\nSoni: " + order.getQuantity());
+
+                InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup(
+                        new InlineKeyboardButton("+").callbackData(product.getProduct_Id() + "_plus"),
+                        new InlineKeyboardButton("-").callbackData(product.getProduct_Id() + "_minus"),
+                        new InlineKeyboardButton("Savatchaga qo'shish").callbackData(product.getProduct_Id() + "_add_to_cart")
+                );
+
+                sendMessage.replyMarkup(inlineKeyboardMarkup);
+                BotService.telegramBot.execute(sendMessage);
+            }
+        }
+    }
+
+
+    private static byte[] loadImageBytes(Path imagePath) {
+        if (!Files.exists(imagePath)) {
+            System.err.println("Fayl mavjud emas: " + imagePath.toString());
+            return new byte[0]; // Fayl mavjud emasligini bildirish
+        }
+        try {
+            return Files.readAllBytes(imagePath);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return new byte[0]; // Xatolik yuzaga kelsa bo'sh massiv qaytarish
+        }
+    }
+
+
+    private static void adjustQuantity(String action, TgUser tgUser, CallbackQuery callbackQuery) {
+        Long productId = Long.parseLong(action.split("_")[0]);
+        ProductOrder order = getOrCreateOrder(tgUser.getChatId(), productId);
+
+        if (action.endsWith("_plus")) {
+            order.setQuantity(order.getQuantity() + 1);
+        } else if (action.endsWith("_minus") && order.getQuantity() > 1) {
+            order.setQuantity(order.getQuantity() - 1);
+        }
+
+        EditMessageReplyMarkup editMessage = new EditMessageReplyMarkup(
+                callbackQuery.message().chat().id(),
+                callbackQuery.message().messageId()
+        );
+
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup(
+                new InlineKeyboardButton("+").callbackData(productId + "_plus"),
+                new InlineKeyboardButton("-").callbackData(productId + "_minus")
+        );
+
+        editMessage.replyMarkup(inlineKeyboardMarkup);
+        BotService.telegramBot.execute(editMessage);
+
+        // Send updated message with new quantity
+        for (Product product : DB.PRODUCTS) {
+            if (product.getProduct_Id().equals(productId)) {
+                SendMessage sendMessage = new SendMessage(tgUser.getChatId(),
+                        product.getName() + " - " + product.getPrice() + " so'm\nSoni: " + order.getQuantity());
+
+                BotService.telegramBot.execute(sendMessage);
+            }
+        }
+    }
+
+
+    private static ProductOrder getOrCreateOrder(Long chatId, Long productId) {
+        for (ProductOrder order : DB.PRODUCT_ORDERS) {
+            if (order.getChatId().equals(chatId) && order.getProductId().equals(productId)) {
+                return order;
+            }
+        }
+        ProductOrder newOrder = new ProductOrder(chatId, productId, 1);
+        DB.PRODUCT_ORDERS.add(newOrder);
+        return newOrder;
+    }
+}
